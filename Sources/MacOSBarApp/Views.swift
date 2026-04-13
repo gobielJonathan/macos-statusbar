@@ -26,6 +26,7 @@ struct StatusBarLabel: View {
 
 struct MetricsMenuView: View {
     let snapshot: SystemSnapshot
+    @ObservedObject var holidayStore: HolidayStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -58,7 +59,7 @@ struct MetricsMenuView: View {
 
             Divider()
 
-            CalendarPanel(referenceDate: snapshot.timestamp)
+            CalendarPanel(referenceDate: snapshot.timestamp, holidayStore: holidayStore)
 
             Divider()
 
@@ -127,21 +128,25 @@ private struct MetricRow: View {
 
 private struct CalendarPanel: View {
     let referenceDate: Date
+    @ObservedObject var holidayStore: HolidayStore
     @State private var displayedMonth: Date
+    @State private var selectedDate: Date?
 
     private let calendar = Calendar.autoupdatingCurrent
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
 
-    init(referenceDate: Date) {
+    init(referenceDate: Date, holidayStore: HolidayStore) {
         self.referenceDate = referenceDate
+        self.holidayStore = holidayStore
         _displayedMonth = State(initialValue: MetricFormatters.startOfMonth(for: referenceDate))
+        _selectedDate = State(initialValue: referenceDate)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
                 Label("Calendar", systemImage: "calendar")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
 
                 Spacer()
 
@@ -151,8 +156,8 @@ private struct CalendarPanel: View {
                 .buttonStyle(.plain)
 
                 Text(MetricFormatters.monthYear(displayedMonth))
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .frame(minWidth: 110)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .frame(minWidth: 96)
 
                 Button(action: { shiftMonth(by: 1) }) {
                     Image(systemName: "chevron.right")
@@ -160,37 +165,83 @@ private struct CalendarPanel: View {
                 .buttonStyle(.plain)
             }
 
-            LazyVGrid(columns: Self.columns, spacing: 6) {
+            LazyVGrid(columns: Self.columns, spacing: 5) {
                 ForEach(MetricFormatters.weekdaySymbols(calendar: calendar), id: \.self) { symbol in
                     Text(symbol)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                 }
 
                 ForEach(calendarSlots) { slot in
-                    CalendarCell(slot: slot, isToday: isToday(slot.date))
+                    CalendarCell(
+                        slot: slot,
+                        isToday: isToday(slot.date),
+                        isSelected: isSelected(slot.date),
+                        marker: holidayStore.marker(for: slot.date, calendar: calendar),
+                        action: {
+                            guard let date = slot.date else {
+                                return
+                            }
+
+                            selectedDate = date
+                        }
+                    )
                 }
             }
 
             HStack {
-                Text("Showing \(MetricFormatters.monthYear(displayedMonth))")
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(.secondary)
-
                 Spacer()
-
                 Button("Today") {
                     displayedMonth = MetricFormatters.startOfMonth(for: referenceDate)
+                    selectedDate = referenceDate
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
             }
+
+            if !selectedEntries.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(selectedEntries) { entry in
+                        HolidayDescriptionRow(entry: entry, showDay: false)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.red.opacity(0.08))
+                )
+            }
+        }
+        .task(id: displayedYear) {
+            await holidayStore.load(year: displayedYear)
         }
     }
 
     private var calendarSlots: [CalendarSlot] {
         MetricFormatters.calendarSlots(for: displayedMonth, calendar: calendar)
+    }
+
+    private var displayedYear: Int {
+        calendar.component(.year, from: displayedMonth)
+    }
+
+    private var selectedEntries: [HolidayMonthEntry] {
+        guard let selectedDate else {
+            return []
+        }
+
+        guard let key = HolidayDateKey(date: selectedDate, calendar: calendar) else {
+            return []
+        }
+
+        return holidayStore.entries(forMonth: displayedMonth, calendar: calendar)
+            .filter {
+                $0.dateKey.year == key.year &&
+                    $0.dateKey.month == key.month &&
+                    $0.dateKey.day == key.day
+            }
     }
 
     private func shiftMonth(by offset: Int) {
@@ -199,6 +250,7 @@ private struct CalendarPanel: View {
         }
 
         displayedMonth = MetricFormatters.startOfMonth(for: nextMonth)
+        selectedDate = nil
     }
 
     private func isToday(_ date: Date?) -> Bool {
@@ -208,25 +260,89 @@ private struct CalendarPanel: View {
 
         return calendar.isDate(date, inSameDayAs: referenceDate)
     }
+
+    private func isSelected(_ date: Date?) -> Bool {
+        guard let date, let selectedDate else {
+            return false
+        }
+
+        return calendar.isDate(date, inSameDayAs: selectedDate)
+    }
+}
+
+private struct HolidayDescriptionRow: View {
+    let entry: HolidayMonthEntry
+    var showDay = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if showDay {
+                Text(String(entry.dateKey.day))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .frame(width: 24, alignment: .leading)
+            }
+
+            Text(entry.item.type.displayName.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Color.red.opacity(0.12))
+                )
+
+            Text(entry.item.name)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+        }
+    }
 }
 
 private struct CalendarCell: View {
     let slot: CalendarSlot
     let isToday: Bool
+    let isSelected: Bool
+    let marker: HolidayMarker?
+    let action: () -> Void
 
     var body: some View {
-        ZStack {
-            if isToday {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.accentColor.opacity(0.18))
-            }
+        let content = Button(action: action) {
+            ZStack {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(0.28))
+                } else if isToday {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(0.18))
+                }
 
-            Text(slot.label)
-                .font(.system(size: 12, weight: isToday ? .bold : .regular, design: .rounded))
-                .foregroundStyle(slot.date == nil ? .tertiary : .primary)
-                .frame(maxWidth: .infinity, minHeight: 24)
+                VStack(spacing: 1) {
+                    Text(slot.label)
+                        .font(.system(size: 11, weight: isToday || isSelected ? .bold : .regular, design: .rounded))
+                        .foregroundStyle(slot.date == nil ? .tertiary : .primary)
+                        .frame(maxWidth: .infinity, minHeight: 18)
+
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 5, height: 5)
+                        .opacity(marker == nil ? 0 : 1)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .contentShape(Rectangle())
         }
-        .frame(height: 24)
+        .frame(height: 28)
+        .buttonStyle(.plain)
+        .disabled(slot.date == nil)
+
+        if let marker {
+            content.help(marker.helpText)
+        } else {
+            content
+        }
     }
 }
 
