@@ -1,94 +1,38 @@
-# macOS Status Bar
+# MacOSBar
 
-A native macOS status bar application that displays real-time system information:
+Small macOS menu bar app that shows:
 
-- **Network usage** — live upload and download rates
-- **CPU usage** — combined utilisation across all cores, updated every 2 seconds
-- **Memory usage** — used RAM vs. total physical memory
-- **Calendar** — upcoming events for the rest of today (requires Calendar permission)
+- Network throughput
+- Memory usage
+- CPU usage
+- GPU usage
+- Calendar date and time
+- A month calendar grid with month and year navigation
 
-## Requirements
+The current branch resolves the older parallel `StatusBarApp` rewrite in favor of the existing `MacOSBar` SwiftUI implementation, so there is one menu bar app and one package layout going forward.
 
-- macOS 13 (Ventura) or later
-- Swift 5.9+ / Xcode 15+
+## Run
 
-## Build & Run
-
-```sh
-# Debug build
-swift build
-
-# Release build
-swift build -c release
-
-# Run directly
-swift run StatusBar
-
-# Or run the compiled binary
-.build/release/StatusBar
+```bash
+rtk swift run
 ```
 
-Open in Xcode:
+The app launches as a menu bar utility without a Dock icon.
 
-```sh
-open Package.swift
+## Start Automatically After Restart
+
+Install the launch agent:
+
+```bash
+chmod +x scripts/install-launch-agent.sh
+./scripts/install-launch-agent.sh
 ```
 
-## Architecture
+This builds a release binary into `~/Library/Application Support/MacOSBar/` and registers a per-user LaunchAgent so the menu bar app starts again automatically when you log in after a reboot.
 
-```
-Sources/
-├── StatusBarCore/          # Platform-agnostic library (models, protocols, formatters)
-│   ├── Models.swift        # CPUInfo, MemoryInfo, NetworkInfo, CalendarEvent
-│   ├── Protocols.swift     # CPUMonitoring, MemoryMonitoring, NetworkMonitoring, CalendarMonitoring
-│   └── Formatters.swift    # Byte / percentage / date formatting utilities
-└── StatusBarApp/           # macOS executable (AppKit + EventKit)
-    ├── main.swift          # NSApplication entry point
-    ├── AppDelegate.swift   # App lifecycle
-    ├── StatusBarController.swift  # NSStatusItem, menu, refresh loop
-    ├── CPUMonitor.swift    # host_processor_info (mach)
-    ├── MemoryMonitor.swift # host_statistics64 (mach)
-    ├── NetworkMonitor.swift# getifaddrs (if_data)
-    └── CalendarMonitor.swift # EKEventStore (EventKit)
-Tests/
-└── StatusBarTests/
-    └── FormattersTests.swift  # Unit tests for Formatters and model clamping
-```
+## Notes
 
-## Status Bar Display
-
-The status bar button shows a compact live summary:
-
-```
-⬆0 B/s  ⬇0 B/s  CPU:3%  RAM:45%  Mon Apr 13
-```
-
-Click the item to open a menu with more detail:
-
-```
-System Status
-─────────────────────
-CPU Usage:  3%
-Memory:  6.1 GB / 16.0 GB  (38%)
-─────────────────────
-Upload:    0 B/s
-Download:  0 B/s
-─────────────────────
-Today's Events
-  14:00  Team standup
-  16:30  1:1 with manager
-─────────────────────
-Quit StatusBar
-```
-
-## Permissions
-
-On first launch the application will prompt for **Calendar** access.  
-This can be managed in **System Settings → Privacy & Security → Calendars**.  
-The app works without calendar access — the events section will simply be empty.
-
-## Running Tests
-
-```sh
-swift test
-```
+- CPU now follows Activity Monitor-style total load as `User + System`.
+- Memory now follows Activity Monitor-style `Memory Used` as `App Memory + Wired Memory + Compressed`.
+- Network throughput is shown as current download and upload speed in fixed `Mb/s`.
+- GPU usage is read from the `IOAccelerator` performance statistics exposed by macOS. If the machine does not expose that field, the app shows `--`.

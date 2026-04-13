@@ -1,18 +1,16 @@
-# Build artefacts
 .build/
-*.o
-*.d
-
-# Xcode
-*.xcodeproj/
-*.xcworkspace/
-xcuserdata/
-DerivedData/
-*.playground/
-
-# macOS
+.swiftpm/
 .DS_Store
 
-# Swift Package Manager
-.swiftpm/
+# Xcode user and build data
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Common Swift/Xcode artifacts
+*.o
+*.d
+*.playground/
 Package.resolved
+xcuserdata/

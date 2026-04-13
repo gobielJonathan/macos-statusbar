@@ -1,32 +1,24 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
-    name: "StatusBar",
+    name: "MacOSBar",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v13),
     ],
     products: [
-        .executable(name: "StatusBar", targets: ["StatusBarApp"]),
-        .library(name: "StatusBarCore", targets: ["StatusBarCore"]),
+        .executable(
+            name: "MacOSBar",
+            targets: ["MacOSBar"]
+        ),
     ],
     targets: [
-        // Platform-agnostic models, protocols, and formatting utilities.
-        .target(
-            name: "StatusBarCore",
-            path: "Sources/StatusBarCore"
-        ),
-        // macOS menu-bar application that ties everything together.
         .executableTarget(
-            name: "StatusBarApp",
-            dependencies: ["StatusBarCore"],
-            path: "Sources/StatusBarApp"
-        ),
-        // Unit tests for StatusBarCore (no AppKit dependency).
-        .testTarget(
-            name: "StatusBarTests",
-            dependencies: ["StatusBarCore"],
-            path: "Tests/StatusBarTests"
+            name: "MacOSBar",
+            path: "Sources/MacOSBarApp",
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+            ]
         ),
     ]
 )
