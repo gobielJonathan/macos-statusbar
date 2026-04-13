@@ -7,3 +7,10 @@ DerivedData/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+
+# Common Swift/Xcode artifacts
+*.o
+*.d
+*.playground/
+Package.resolved
+xcuserdata/

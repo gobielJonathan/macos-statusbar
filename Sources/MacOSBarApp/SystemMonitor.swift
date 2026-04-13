@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import IOKit
 
-struct SystemSnapshot {
+struct SystemSnapshot: Sendable {
     let timestamp: Date
     let cpuUsage: CPUUsageSnapshot?
     let memory: MemorySnapshot?
@@ -19,7 +19,7 @@ struct SystemSnapshot {
     )
 }
 
-struct CPUUsageSnapshot {
+struct CPUUsageSnapshot: Sendable {
     let userRatio: Double
     let systemRatio: Double
     let idleRatio: Double
@@ -29,7 +29,7 @@ struct CPUUsageSnapshot {
     }
 }
 
-struct MemorySnapshot {
+struct MemorySnapshot: Sendable {
     let appBytes: UInt64
     let wiredBytes: UInt64
     let compressedBytes: UInt64
@@ -49,7 +49,7 @@ struct MemorySnapshot {
     }
 }
 
-struct NetworkThroughput {
+struct NetworkThroughput: Sendable {
     let downloadBytesPerSecond: Double
     let uploadBytesPerSecond: Double
 }
@@ -58,35 +58,95 @@ struct NetworkThroughput {
 final class SystemMonitor: ObservableObject {
     @Published private(set) var snapshot = SystemSnapshot.placeholder
 
+    private let sampler = SnapshotSampler()
+    private var producerTask: Task<Void, Never>?
+    private var consumerTask: Task<Void, Never>?
+
+    init() {
+        var continuation: AsyncStream<SystemSnapshot>.Continuation?
+        let stream = AsyncStream<SystemSnapshot>(bufferingPolicy: .bufferingNewest(1)) {
+            continuation = $0
+        }
+
+        guard let continuation else {
+            return
+        }
+
+        producerTask = Task.detached(priority: .utility) { [sampler, continuation] in
+            let clock = ContinuousClock()
+            var nextTick = clock.now
+
+            while !Task.isCancelled {
+                let snapshot = await sampler.snapshot(at: Date())
+                continuation.yield(snapshot)
+
+                nextTick += .seconds(1)
+
+                do {
+                    try await clock.sleep(until: nextTick, tolerance: .milliseconds(200))
+                } catch {
+                    break
+                }
+            }
+
+            continuation.finish()
+        }
+
+        consumerTask = Task { [weak self] in
+            for await snapshot in stream {
+                self?.snapshot = snapshot
+            }
+        }
+    }
+
+    deinit {
+        producerTask?.cancel()
+        consumerTask?.cancel()
+    }
+}
+
+private actor SnapshotSampler {
     private let cpuSampler = CPUSampler()
     private let memorySampler = MemorySampler()
     private let networkSampler = NetworkSampler()
     private let gpuSampler = GPUSampler()
-    private var timer: Timer?
 
-    init() {
-        refresh()
+    private var cachedMemorySample: (timestamp: Date, snapshot: MemorySnapshot?)?
+    private var cachedGPUUsage: (timestamp: Date, usage: Double?)?
 
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refresh()
-            }
+    private let memoryRefreshInterval: TimeInterval = 5
+    private let gpuRefreshInterval: TimeInterval = 3
+
+    func snapshot(at date: Date) -> SystemSnapshot {
+        autoreleasepool {
+            SystemSnapshot(
+                timestamp: date,
+                cpuUsage: cpuSampler.usage(),
+                memory: memorySnapshot(at: date),
+                network: networkSampler.throughput(at: date),
+                gpuUsage: gpuUsage(at: date)
+            )
         }
-        timer.tolerance = 0.15
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
     }
 
-    private func refresh() {
-        let now = Date()
+    private func memorySnapshot(at date: Date) -> MemorySnapshot? {
+        if let cachedMemorySample, date.timeIntervalSince(cachedMemorySample.timestamp) < memoryRefreshInterval {
+            return cachedMemorySample.snapshot
+        }
 
-        snapshot = SystemSnapshot(
-            timestamp: now,
-            cpuUsage: cpuSampler.usage(),
-            memory: memorySampler.sample(),
-            network: networkSampler.throughput(at: now),
-            gpuUsage: gpuSampler.usage()
-        )
+        let snapshot = memorySampler.sample()
+        cachedMemorySample = (timestamp: date, snapshot: snapshot)
+        return snapshot
+    }
+
+    private func gpuUsage(at date: Date) -> Double? {
+        if let cachedGPUUsage, date.timeIntervalSince(cachedGPUUsage.timestamp) < gpuRefreshInterval {
+            return cachedGPUUsage.usage
+        }
+
+        let usage = gpuSampler.usage()
+        cachedGPUUsage = (timestamp: date, usage: usage)
+        return usage
     }
 }
 
@@ -140,7 +200,23 @@ private final class CPUSampler {
 }
 
 private struct MemorySampler {
+    private let pageSize: UInt64?
+    private let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+
+    init() {
+        var pageSize: vm_size_t = 0
+        if host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS {
+            self.pageSize = UInt64(pageSize)
+        } else {
+            self.pageSize = nil
+        }
+    }
+
     func sample() -> MemorySnapshot? {
+        guard let pageSize else {
+            return nil
+        }
+
         var statistics = vm_statistics64()
         var count = mach_msg_type_number_t(
             MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size
@@ -156,11 +232,6 @@ private struct MemorySampler {
             return nil
         }
 
-        var pageSize: vm_size_t = 0
-        guard host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS else {
-            return nil
-        }
-
         let purgeablePages = UInt64(statistics.purgeable_count)
         let internalPages = UInt64(statistics.internal_page_count)
         let appPages = internalPages > purgeablePages ? internalPages - purgeablePages : 0
@@ -173,7 +244,7 @@ private struct MemorySampler {
             wiredBytes: wiredPages * UInt64(pageSize),
             compressedBytes: compressedPages * UInt64(pageSize),
             cachedBytes: cachedPages * UInt64(pageSize),
-            totalBytes: ProcessInfo.processInfo.physicalMemory
+            totalBytes: totalMemoryBytes
         )
     }
 }
@@ -237,7 +308,12 @@ private final class NetworkSampler {
 
             let interfaceName = String(cString: interface.ifa_name)
             let flags = Int32(interface.ifa_flags)
-            guard !interfaceName.isEmpty, (flags & IFF_UP) != 0, (flags & IFF_RUNNING) != 0 else {
+            guard
+                !interfaceName.isEmpty,
+                (flags & IFF_UP) != 0,
+                (flags & IFF_RUNNING) != 0,
+                (flags & IFF_LOOPBACK) == 0
+            else {
                 continue
             }
 

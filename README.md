@@ -9,6 +9,8 @@ Small macOS menu bar app that shows:
 - Calendar date and time
 - A month calendar grid with month and year navigation
 
+The current branch resolves the older parallel `StatusBarApp` rewrite in favor of the existing `MacOSBar` SwiftUI implementation, so there is one menu bar app and one package layout going forward.
+
 ## Run
 
 ```bash

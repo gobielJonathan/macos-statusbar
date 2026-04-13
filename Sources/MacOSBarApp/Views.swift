@@ -130,7 +130,7 @@ private struct CalendarPanel: View {
     @State private var displayedMonth: Date
 
     private let calendar = Calendar.autoupdatingCurrent
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
 
     init(referenceDate: Date) {
         self.referenceDate = referenceDate
@@ -160,7 +160,7 @@ private struct CalendarPanel: View {
                 .buttonStyle(.plain)
             }
 
-            LazyVGrid(columns: columns, spacing: 6) {
+            LazyVGrid(columns: Self.columns, spacing: 6) {
                 ForEach(MetricFormatters.weekdaySymbols(calendar: calendar), id: \.self) { symbol in
                     Text(symbol)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -231,7 +231,7 @@ private struct CalendarCell: View {
 }
 
 private struct CalendarSlot: Identifiable {
-    let id = UUID()
+    let id: Int
     let date: Date?
     let label: String
 }
@@ -266,6 +266,12 @@ private enum MetricFormatters {
         let formatter = DateFormatter()
         formatter.locale = .autoupdatingCurrent
         formatter.setLocalizedDateFormatFromTemplate("MMMM yyyy")
+        return formatter
+    }()
+
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
         return formatter
     }()
 
@@ -323,10 +329,7 @@ private enum MetricFormatters {
     }
 
     static func weekdaySymbols(calendar: Calendar = .autoupdatingCurrent) -> [String] {
-        let formatter = DateFormatter()
-        formatter.locale = .autoupdatingCurrent
-
-        let symbols = formatter.shortStandaloneWeekdaySymbols ?? formatter.shortWeekdaySymbols ?? []
+        let symbols = weekdayFormatter.shortStandaloneWeekdaySymbols ?? weekdayFormatter.shortWeekdaySymbols ?? []
         guard !symbols.isEmpty else {
             return ["S", "M", "T", "W", "T", "F", "S"]
         }
@@ -348,21 +351,26 @@ private enum MetricFormatters {
         let weekdayOfFirstDay = calendar.component(.weekday, from: firstDay)
         let leadingEmptyCells = (weekdayOfFirstDay - calendar.firstWeekday + 7) % 7
 
-        var slots = Array(
-            repeating: CalendarSlot(date: nil, label: ""),
-            count: leadingEmptyCells
-        )
+        var slots: [CalendarSlot] = []
+        slots.reserveCapacity(leadingEmptyCells + monthRange.count + 7)
+
+        for index in 0..<leadingEmptyCells {
+            slots.append(CalendarSlot(id: index, date: nil, label: ""))
+        }
 
         for day in monthRange {
             var components = calendar.dateComponents([.year, .month], from: month)
             components.day = day
             let dayDate = calendar.date(from: components)
-            slots.append(CalendarSlot(date: dayDate, label: String(day)))
+            slots.append(CalendarSlot(id: slots.count, date: dayDate, label: String(day)))
         }
 
         let trailingCells = (7 - (slots.count % 7)) % 7
         if trailingCells > 0 {
-            slots.append(contentsOf: Array(repeating: CalendarSlot(date: nil, label: ""), count: trailingCells))
+            let startIndex = slots.count
+            for offset in 0..<trailingCells {
+                slots.append(CalendarSlot(id: startIndex + offset, date: nil, label: ""))
+            }
         }
 
         return slots
