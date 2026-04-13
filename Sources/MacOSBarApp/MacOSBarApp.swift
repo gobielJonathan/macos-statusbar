@@ -5,10 +5,11 @@ import SwiftUI
 struct MacOSBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var monitor = SystemMonitor()
+    @StateObject private var holidayStore = HolidayStore()
 
     var body: some Scene {
         MenuBarExtra {
-            MetricsMenuView(snapshot: monitor.snapshot)
+            MetricsMenuView(snapshot: monitor.snapshot, holidayStore: holidayStore)
         } label: {
             StatusBarLabel(snapshot: monitor.snapshot)
         }
